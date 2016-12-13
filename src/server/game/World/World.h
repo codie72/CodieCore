@@ -242,6 +242,7 @@ enum WorldIntConfigs
     CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL_DIFFERENCE,
     CONFIG_INSTANCE_RESET_TIME_HOUR,
     CONFIG_INSTANCE_UNLOAD_DELAY,
+    CONFIG_DAILY_QUEST_RESET_TIME_HOUR,
     CONFIG_MAX_PRIMARY_TRADE_SKILL,
     CONFIG_MIN_PETITION_SIGNS,
     CONFIG_GM_LOGIN_STATE,
@@ -506,6 +507,7 @@ enum RealmZone
 
 enum WorldStates
 {
+    WS_ARENA_DISTRIBUTION_TIME  = 20001,                     // Next arena distribution time
     WS_WEEKLY_QUEST_RESET_TIME  = 20002,                     // Next weekly reset time
     WS_BG_DAILY_RESET_TIME      = 20003,                     // Next daily BG reset time
     WS_CLEANING_FLAGS           = 20004,                     // Cleaning Flags
@@ -782,7 +784,7 @@ class TC_GAME_API World
         // callback for UpdateRealmCharacters
         void _UpdateRealmCharCount(PreparedQueryResult resultCharCount);
 
-        void InitDailyQuestResetTime();
+        void InitDailyQuestResetTime(bool loading = true);
         void InitWeeklyQuestResetTime();
         void InitMonthlyQuestResetTime();
         void InitRandomBGResetTime();

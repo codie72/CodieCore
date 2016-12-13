@@ -43,8 +43,6 @@ struct GameObjectTemplate
     std::string IconName;
     std::string castBarCaption;
     std::string unk1;
-    uint32  faction;
-    uint32  flags;
     float   size;
     union                                                   // different GO types have different data field
     {
@@ -497,6 +495,7 @@ struct GameObjectTemplate
     {
         switch (type)
         {
+            case GAMEOBJECT_TYPE_BUTTON:      return button.linkedTrap;
             case GAMEOBJECT_TYPE_CHEST:       return chest.linkedTrapId;
             case GAMEOBJECT_TYPE_SPELL_FOCUS: return spellFocus.linkedTrapId;
             case GAMEOBJECT_TYPE_GOOBER:      return goober.linkedTrapId;
@@ -562,8 +561,19 @@ struct GameObjectTemplate
     }
 };
 
+// From `gameobject_template_addon`
+struct GameObjectTemplateAddon
+{
+    uint32  entry;
+    uint32  faction;
+    uint32  flags;
+    uint32  mingold;
+    uint32  maxgold;
+};
+
 // Benchmarked: Faster than std::map (insert/find)
 typedef std::unordered_map<uint32, GameObjectTemplate> GameObjectTemplateContainer;
+typedef std::unordered_map<uint32, GameObjectTemplateAddon> GameObjectTemplateAddonContainer;
 
 class OPvPCapturePoint;
 struct TransportAnimation;
@@ -678,6 +688,7 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         bool Create(ObjectGuid::LowType guidlow, uint32 name_id, Map* map, uint32 phaseMask, Position const& pos, G3D::Quat const& rotation, uint32 animprogress, GOState go_state, uint32 artKit = 0);
         void Update(uint32 p_time) override;
         GameObjectTemplate const* GetGOInfo() const { return m_goInfo; }
+        GameObjectTemplateAddon const* GetTemplateAddon() const { return m_goTemplateAddon; }
         GameObjectData const* GetGOData() const { return m_goData; }
         GameObjectValue const* GetGOValue() const { return &m_goValue; }
 
@@ -690,6 +701,7 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
          // z_rot, y_rot, x_rot - rotation angles around z, y and x axes
         void SetWorldRotationAngles(float z_rot, float y_rot, float x_rot);
         void SetWorldRotation(G3D::Quat const& rot);
+        G3D::Quat const& GetWorldRotation() const { return m_worldRotation; }
         void SetParentRotation(G3D::Quat const& rotation);      // transforms(rotates) transport's path
         int64 GetPackedWorldRotation() const { return m_packedRotation; }
 
@@ -801,11 +813,14 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
 
         Player* GetLootRecipient() const;
         Group* GetLootRecipientGroup() const;
-        void SetLootRecipient(Unit* unit);
+        void SetLootRecipient(Unit* unit, Group* group = nullptr);
         bool IsLootAllowedFor(Player const* player) const;
         bool HasLootRecipient() const { return !m_lootRecipient.IsEmpty() || m_lootRecipientGroup; }
         uint32 m_groupLootTimer;                            // (msecs)timer used for group loot
         ObjectGuid::LowType lootingGroupLowGUID;                         // used to find group which is looting
+
+        GameObject* GetLinkedTrap();
+        void SetLinkedTrap(GameObject* linkedTrap) { m_linkedTrap = linkedTrap->GetGUID(); }
 
         bool hasQuest(uint32 quest_id) const override;
         bool hasInvolvedQuest(uint32 quest_id) const override;
@@ -832,6 +847,7 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         GameObject* LookupFishingHoleAround(float range);
 
         void CastSpell(Unit* target, uint32 spell, bool triggered = true);
+        void CastSpell(Unit* target, uint32 spell, TriggerCastFlags triggered);
         void SendCustomAnim(uint32 anim);
         bool IsInRange(float x, float y, float z, float radius) const;
 
@@ -889,6 +905,8 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         bool        m_spawnedByDefault;
         time_t      m_cooldownTime;                         // used as internal reaction delay time store (not state change reaction).
                                                             // For traps this: spell casting cooldown, for doors/buttons: reset time.
+        GOState     m_prevGoState;                          // What state to set whenever resetting
+
         std::list<ObjectGuid::LowType> m_SkillupList;
 
         ObjectGuid m_ritualOwnerGUID;                       // used for GAMEOBJECT_TYPE_SUMMONING_RITUAL where GO is not summoned (no owner)
@@ -900,6 +918,7 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
 
         ObjectGuid::LowType m_spawnId;                               ///< For new or temporary gameobjects is 0 for saved it is lowguid
         GameObjectTemplate const* m_goInfo;
+        GameObjectTemplateAddon const* m_goTemplateAddon;
         GameObjectData const* m_goData;
         GameObjectValue m_goValue;
 
@@ -910,6 +929,9 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         ObjectGuid m_lootRecipient;
         uint32 m_lootRecipientGroup;
         uint16 m_LootMode;                                  // bitmask, default LOOT_MODE_DEFAULT, determines what loot will be lootable
+
+        ObjectGuid m_linkedTrap;
+
     private:
         void RemoveFromOwner();
         void SwitchDoorOrButton(bool activate, bool alternative = false);

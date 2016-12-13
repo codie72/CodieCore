@@ -38,14 +38,6 @@ void SmartWaypointMgr::LoadFromDB()
 {
     uint32 oldMSTime = getMSTime();
 
-    for (std::unordered_map<uint32, WPPath*>::iterator itr = waypoint_map.begin(); itr != waypoint_map.end(); ++itr)
-    {
-        for (WPPath::iterator pathItr = itr->second->begin(); pathItr != itr->second->end(); ++pathItr)
-            delete pathItr->second;
-
-        delete itr->second;
-    }
-
     waypoint_map.clear();
 
     PreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_SEL_SMARTAI_WP);
@@ -73,9 +65,10 @@ void SmartWaypointMgr::LoadFromDB()
         y = fields[3].GetFloat();
         z = fields[4].GetFloat();
 
+        WPPath& path = waypoint_map[entry];
+
         if (last_entry != entry)
         {
-            waypoint_map[entry] = new WPPath();
             last_id = 1;
             count++;
         }
@@ -84,7 +77,14 @@ void SmartWaypointMgr::LoadFromDB()
             TC_LOG_ERROR("sql.sql", "SmartWaypointMgr::LoadFromDB: Path entry %u, unexpected point id %u, expected %u.", entry, id, last_id);
 
         last_id++;
-        (*waypoint_map[entry])[id] = new WayPoint(id, x, y, z);
+
+        WayPoint point;
+        point.id = id;
+        point.x = x;
+        point.y = y;
+        point.z = z;
+
+        path.push_back(std::move(point));
 
         last_entry = entry;
         total++;
@@ -92,17 +92,6 @@ void SmartWaypointMgr::LoadFromDB()
     while (result->NextRow());
 
     TC_LOG_INFO("server.loading", ">> Loaded %u SmartAI waypoint paths (total %u waypoints) in %u ms", count, total, GetMSTimeDiffToNow(oldMSTime));
-}
-
-SmartWaypointMgr::~SmartWaypointMgr()
-{
-    for (std::unordered_map<uint32, WPPath*>::iterator itr = waypoint_map.begin(); itr != waypoint_map.end(); ++itr)
-    {
-        for (WPPath::iterator pathItr = itr->second->begin(); pathItr != itr->second->end(); ++pathItr)
-            delete pathItr->second;
-
-        delete itr->second;
-    }
 }
 
 SmartAIMgr* SmartAIMgr::instance()
@@ -225,7 +214,7 @@ void SmartAIMgr::LoadSmartAIFromDB()
         temp.event.type = (SMART_EVENT)fields[4].GetUInt8();
         temp.event.event_phase_mask = fields[5].GetUInt8();
         temp.event.event_chance = fields[6].GetUInt8();
-        temp.event.event_flags = fields[7].GetUInt8();
+        temp.event.event_flags = fields[7].GetUInt16();
 
         temp.event.raw.param1 = fields[8].GetUInt32();
         temp.event.raw.param2 = fields[9].GetUInt32();
@@ -374,6 +363,7 @@ bool SmartAIMgr::IsTargetValid(SmartScriptHolder const& e)
         case SMART_TARGET_CLOSEST_ENEMY:
         case SMART_TARGET_CLOSEST_FRIENDLY:
         case SMART_TARGET_STORED:
+        case SMART_TARGET_LOOT_RECIPIENTS:
             break;
         default:
             TC_LOG_ERROR("sql.sql", "SmartAIMgr: Not handled target_type(%u), Entry %d SourceType %u Event %u Action %u, skipped.", e.GetTargetType(), e.entryOrGuid, e.GetScriptType(), e.event_id, e.GetActionType());
@@ -572,7 +562,7 @@ bool SmartAIMgr::IsEventValid(SmartScriptHolder& e)
             }
             case SMART_EVENT_MOVEMENTINFORM:
             {
-                if (e.event.movementInform.type > NULL_MOTION_TYPE)
+                if (e.event.movementInform.type >= MAX_MOTION_TYPE)
                 {
                     TC_LOG_ERROR("sql.sql", "SmartAIMgr: Entry %d SourceType %u Event %u Action %u uses invalid Motion type %u, skipped.", e.entryOrGuid, e.GetScriptType(), e.event_id, e.GetActionType(), e.event.movementInform.type);
                     return false;
@@ -808,7 +798,7 @@ bool SmartAIMgr::IsEventValid(SmartScriptHolder& e)
                 return false;
             break;
         case SMART_ACTION_FAIL_QUEST:
-        case SMART_ACTION_ADD_QUEST:
+        case SMART_ACTION_OFFER_QUEST:
             if (!e.action.quest.quest || !IsQuestValid(e, e.action.quest.quest))
                 return false;
             break;
@@ -1063,7 +1053,8 @@ bool SmartAIMgr::IsEventValid(SmartScriptHolder& e)
             break;
         case SMART_ACTION_WP_START:
             {
-                if (!sSmartWaypointMgr->GetPath(e.action.wpStart.pathID))
+                WPPath const* path = sSmartWaypointMgr->GetPath(e.action.wpStart.pathID);
+                if (!path || path->empty())
                 {
                     TC_LOG_ERROR("sql.sql", "SmartAIMgr: Creature %d Event %u Action %u uses non-existent WaypointPath id %u, skipped.", e.entryOrGuid, e.event_id, e.GetActionType(), e.action.wpStart.pathID);
                     return false;
@@ -1174,7 +1165,6 @@ bool SmartAIMgr::IsEventValid(SmartScriptHolder& e)
             }
             break;
         }
-        case SMART_ACTION_START_CLOSEST_WAYPOINT:
         case SMART_ACTION_FOLLOW:
         case SMART_ACTION_SET_ORIENTATION:
         case SMART_ACTION_STORE_TARGET_LIST:
@@ -1243,6 +1233,7 @@ bool SmartAIMgr::IsEventValid(SmartScriptHolder& e)
         case SMART_ACTION_SUMMON_CREATURE_GROUP:
         case SMART_ACTION_MOVE_OFFSET:
         case SMART_ACTION_SET_CORPSE_DELAY:
+        case SMART_ACTION_DISABLE_EVADE:
             break;
         default:
             TC_LOG_ERROR("sql.sql", "SmartAIMgr: Not handled action_type(%u), event_type(%u), Entry %d SourceType %u Event %u, skipped.", e.GetActionType(), e.GetEventType(), e.entryOrGuid, e.GetScriptType(), e.event_id);

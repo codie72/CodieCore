@@ -119,6 +119,10 @@ class TC_GAME_API Channel
     struct PlayerInfo
     {
         uint8 flags;
+        bool invisible;
+
+        bool IsInvisible() const { return invisible; }
+        void SetInvisible(bool on) { invisible = on; }
 
         bool HasFlag(uint8 flag) const { return (flags & flag) != 0; }
         void SetFlag(uint8 flag) { flags |= flag; }
@@ -146,9 +150,11 @@ class TC_GAME_API Channel
     };
 
     public:
-        Channel(std::string const& name, uint32 channel_id, uint32 team = 0);
+        Channel(uint32 channelId, uint32 team = 0, AreaTableEntry const* zoneEntry = nullptr);  // built-in channel ctor
+        Channel(std::string const& name, uint32 team = 0);                                      // custom player channel ctor
 
-        std::string const& GetName() const { return _channelName; }
+        static void GetChannelName(std::string& channelName, uint32 channelId, LocaleConstant locale, AreaTableEntry const* zoneEntry);
+        std::string GetName(LocaleConstant locale = DEFAULT_LOCALE) const;
 
         uint32 GetChannelId() const { return _channelId; }
         bool IsConstant() const { return _channelId != 0; }
@@ -164,6 +170,8 @@ class TC_GAME_API Channel
 
         uint8 GetFlags() const { return _channelFlags; }
         bool HasFlag(uint8 flag) const { return (_channelFlags & flag) != 0; }
+
+        AreaTableEntry const* GetZoneEntry() const { return _zoneEntry; }
 
         void JoinChannel(Player* player, std::string const& pass);
         void LeaveChannel(Player* player, bool send = true);
@@ -181,6 +189,8 @@ class TC_GAME_API Channel
         void SetMute(Player const* player, std::string const& newname) { SetMode(player, newname, false, true); }
         void UnsetMute(Player const* player, std::string const& newname) { SetMode(player, newname, false, false); }
 
+        void SetInvisible(Player const* player, bool on);
+
         void SetOwner(ObjectGuid guid, bool exclaim = true);
         void SetOwner(Player const* player, std::string const& name);
         void SendWhoOwner(ObjectGuid guid);
@@ -197,47 +207,15 @@ class TC_GAME_API Channel
         static void CleanOldChannelsInDB();
 
     private:
-        // initial packet data (notify type and channel name)
-        void MakeNotifyPacket(WorldPacket* data, uint8 notify_type) const;
-        // type specific packet data
-        void MakeJoined(WorldPacket* data, ObjectGuid guid) const;                          //+ 0x00
-        void MakeLeft(WorldPacket* data, ObjectGuid guid) const;                            //+ 0x01
-        void MakeYouJoined(WorldPacket* data) const;                                        //+ 0x02
-        void MakeYouLeft(WorldPacket* data) const;                                          //+ 0x03
-        void MakeWrongPassword(WorldPacket* data) const;                                    //? 0x04
-        void MakeNotMember(WorldPacket* data) const;                                        //? 0x05
-        void MakeNotModerator(WorldPacket* data) const;                                     //? 0x06
-        void MakePasswordChanged(WorldPacket* data, ObjectGuid guid) const;                 //+ 0x07
-        void MakeOwnerChanged(WorldPacket* data, ObjectGuid guid) const;                    //? 0x08
-        void MakePlayerNotFound(WorldPacket* data, std::string const& name) const;          //+ 0x09
-        void MakeNotOwner(WorldPacket* data) const;                                         //? 0x0A
-        void MakeChannelOwner(WorldPacket* data) const;                                     //? 0x0B
-        void MakeModeChange(WorldPacket* data, ObjectGuid guid, uint8 oldflags) const;      //+ 0x0C
-        void MakeAnnouncementsOn(WorldPacket* data, ObjectGuid guid) const;                 //+ 0x0D
-        void MakeAnnouncementsOff(WorldPacket* data, ObjectGuid guid) const;                //+ 0x0E
-        void MakeMuted(WorldPacket* data) const;                                            //? 0x11
-        void MakePlayerKicked(WorldPacket* data, ObjectGuid bad, ObjectGuid good) const;    //? 0x12
-        void MakeBanned(WorldPacket* data) const;                                           //? 0x13
-        void MakePlayerBanned(WorldPacket* data, ObjectGuid bad, ObjectGuid good) const;    //? 0x14
-        void MakePlayerUnbanned(WorldPacket* data, ObjectGuid bad, ObjectGuid good) const;  //? 0x15
-        void MakePlayerNotBanned(WorldPacket* data, std::string const& name) const;         //? 0x16
-        void MakePlayerAlreadyMember(WorldPacket* data, ObjectGuid guid) const;             //+ 0x17
-        void MakeInvite(WorldPacket* data, ObjectGuid guid) const;                          //? 0x18
-        void MakeInviteWrongFaction(WorldPacket* data) const;                               //? 0x19
-        void MakeWrongFaction(WorldPacket* data) const;                                     //? 0x1A
-        void MakeInvalidName(WorldPacket* data) const;                                      //? 0x1B
-        void MakeNotModerated(WorldPacket* data) const;                                     //? 0x1C
-        void MakePlayerInvited(WorldPacket* data, std::string const& name) const;           //+ 0x1D
-        void MakePlayerInviteBanned(WorldPacket* data, std::string const& name) const;      //? 0x1E
-        void MakeThrottled(WorldPacket* data) const;                                        //? 0x1F
-        void MakeNotInArea(WorldPacket* data) const;                                        //? 0x20
-        void MakeNotInLfg(WorldPacket* data) const;                                         //? 0x21
-        void MakeVoiceOn(WorldPacket* data, ObjectGuid guid) const;                         //+ 0x22
-        void MakeVoiceOff(WorldPacket* data, ObjectGuid guid) const;                        //+ 0x23
 
-        void SendToAll(WorldPacket* data, ObjectGuid guid = ObjectGuid::Empty) const;
-        void SendToAllButOne(WorldPacket* data, ObjectGuid who) const;
-        void SendToOne(WorldPacket* data, ObjectGuid who) const;
+        template<class Builder>
+        void SendToAll(Builder&, ObjectGuid guid = ObjectGuid::Empty) const;
+
+        template<class Builder>
+        void SendToAllButOne(Builder& builder, ObjectGuid who) const;
+
+        template<class Builder>
+        void SendToOne(Builder& builder, ObjectGuid who) const;
 
         bool IsOn(ObjectGuid who) const { return _playersStore.count(who) != 0; }
         bool IsBanned(ObjectGuid guid) const { return _bannedStore.count(guid) != 0; }
@@ -251,39 +229,8 @@ class TC_GAME_API Channel
             return itr != _playersStore.end() ? itr->second.flags : 0;
         }
 
-        void SetModerator(ObjectGuid guid, bool set)
-        {
-            if (!IsOn(guid))
-                return;
-
-            PlayerInfo& playerInfo = _playersStore.at(guid);
-            if (playerInfo.IsModerator() != set)
-            {
-                uint8 oldFlag = GetPlayerFlags(guid);
-                playerInfo.SetModerator(set);
-
-                WorldPacket data;
-                MakeModeChange(&data, guid, oldFlag);
-                SendToAll(&data);
-            }
-        }
-
-        void SetMute(ObjectGuid guid, bool set)
-        {
-            if (!IsOn(guid))
-                return;
-
-            PlayerInfo& playerInfo = _playersStore.at(guid);
-            if (playerInfo.IsMuted() != set)
-            {
-                uint8 oldFlag = GetPlayerFlags(guid);
-                playerInfo.SetMuted(set);
-
-                WorldPacket data;
-                MakeModeChange(&data, guid, oldFlag);
-                SendToAll(&data);
-            }
-        }
+        void SetModerator(ObjectGuid guid, bool set);
+        void SetMute(ObjectGuid guid, bool set);
 
         typedef std::map<ObjectGuid, PlayerInfo> PlayerContainer;
         typedef GuidUnorderedSet BannedContainer;
@@ -291,6 +238,7 @@ class TC_GAME_API Channel
         bool _announceEnabled;          //< Whether we should broadcast a packet whenever a player joins/exits the channel
         bool _ownershipEnabled;         //< Whether the channel has to maintain an owner
         bool _persistentChannel;        //< Whether the channel is saved to DB
+        bool _isOwnerInvisible;         //< Whether the channel is owned by invisible GM, ownership should change to first player that joins channel
 
         uint8 _channelFlags;
         uint32 _channelId;
@@ -300,6 +248,8 @@ class TC_GAME_API Channel
         std::string _channelPassword;
         PlayerContainer _playersStore;
         BannedContainer _bannedStore;
+
+        AreaTableEntry const* _zoneEntry;
 };
 #endif
 

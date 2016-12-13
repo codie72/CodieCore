@@ -26,6 +26,7 @@
 #include "DatabaseEnv.h"
 #include "CellImpl.h"
 #include "Chat.h"
+#include "Channel.h"
 #include "ChannelMgr.h"
 #include "GridNotifiersImpl.h"
 #include "Group.h"
@@ -56,7 +57,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
 
     if (lang == LANG_UNIVERSAL && type != CHAT_MSG_AFK && type != CHAT_MSG_DND)
     {
-        TC_LOG_ERROR("network", "CMSG_MESSAGECHAT: Possible hacking-attempt: %s tried to send a message in universal language", GetPlayerInfo().c_str());
+        TC_LOG_ERROR("entities.player.cheat", "CMSG_MESSAGECHAT: Possible hacking-attempt: %s tried to send a message in universal language", GetPlayerInfo().c_str());
         SendNotification(LANG_UNKNOWN_LANGUAGE);
         recvData.rfinish();
         return;
@@ -461,13 +462,10 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 }
             }
 
-            if (ChannelMgr* cMgr = ChannelMgr::forTeam(sender->GetTeam()))
+            if (Channel* chn = ChannelMgr::GetChannelForPlayerByNamePart(channel, sender))
             {
-                if (Channel* chn = cMgr->GetChannel(channel, sender))
-                {
-                    sScriptMgr->OnPlayerChat(sender, type, lang, msg, chn);
-                    chn->Say(sender->GetGUID(), msg.c_str(), lang);
-                }
+                sScriptMgr->OnPlayerChat(sender, type, lang, msg, chn);
+                chn->Say(sender->GetGUID(), msg.c_str(), lang);
             }
             break;
         }

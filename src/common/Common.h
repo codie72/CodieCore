@@ -35,6 +35,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <numeric>
 
 #include <cmath>
 #include <cstdio>
@@ -133,7 +134,7 @@ enum LocaleConstant
 #define MAX_LOCALES 8
 #define MAX_ACCOUNT_TUTORIAL_VALUES 8
 
-extern "C" TC_COMMON_API char const* localeNames[TOTAL_LOCALES];
+TC_COMMON_API extern char const* localeNames[TOTAL_LOCALES];
 
 TC_COMMON_API LocaleConstant GetLocaleByName(const std::string& name);
 

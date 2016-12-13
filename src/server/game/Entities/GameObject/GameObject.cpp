@@ -49,7 +49,9 @@ GameObject::GameObject() : WorldObject(false), MapObject(),
     m_usetimes = 0;
     m_spellId = 0;
     m_cooldownTime = 0;
+    m_prevGoState = GO_STATE_ACTIVE;
     m_goInfo = nullptr;
+    m_goTemplateAddon = nullptr;
     m_goData = nullptr;
     m_packedRotation = 0;
 
@@ -215,6 +217,7 @@ bool GameObject::Create(ObjectGuid::LowType guidlow, uint32 name_id, Map* map, u
     Object::_Create(guidlow, goinfo->entry, HighGuid::GameObject);
 
     m_goInfo = goinfo;
+    m_goTemplateAddon = sObjectMgr->GetGameObjectTemplateAddon(name_id);
 
     if (goinfo->type >= MAX_GAMEOBJECT_TYPE)
     {
@@ -234,8 +237,11 @@ bool GameObject::Create(ObjectGuid::LowType guidlow, uint32 name_id, Map* map, u
 
     SetObjectScale(goinfo->size);
 
-    SetUInt32Value(GAMEOBJECT_FACTION, goinfo->faction);
-    SetUInt32Value(GAMEOBJECT_FLAGS, goinfo->flags);
+    if (m_goTemplateAddon)
+    {
+        SetUInt32Value(GAMEOBJECT_FACTION, m_goTemplateAddon->faction);
+        SetUInt32Value(GAMEOBJECT_FLAGS, m_goTemplateAddon->flags);
+    }
 
     SetEntry(goinfo->entry);
 
@@ -247,6 +253,7 @@ bool GameObject::Create(ObjectGuid::LowType guidlow, uint32 name_id, Map* map, u
     m_model = CreateModel();
     // GAMEOBJECT_BYTES_1, index at 0, 1, 2 and 3
     SetGoType(GameobjectTypes(goinfo->type));
+    m_prevGoState = go_state;
     SetGoState(go_state);
     SetGoArtKit(artKit);
 
@@ -302,6 +309,18 @@ bool GameObject::Create(ObjectGuid::LowType guidlow, uint32 name_id, Map* map, u
     // Initialize loot duplicate count depending on raid difficulty
     if (map->Is25ManRaid())
         loot.maxDuplicates = 3;
+
+    if (uint32 linkedEntry = GetGOInfo()->GetLinkedGameObjectEntry())
+    {
+        GameObject* linkedGO = new GameObject();
+        if (linkedGO->Create(map->GenerateLowGuid<HighGuid::GameObject>(), linkedEntry, map, phaseMask, pos, rotation, 255, GO_STATE_READY))
+        {
+            SetLinkedTrap(linkedGO);
+            map->AddToMap(linkedGO);
+        }
+        else
+            delete linkedGO;
+    }
 
     return true;
 }
@@ -421,6 +440,10 @@ void GameObject::Update(uint32 diff)
                     m_SkillupList.clear();
                     m_usetimes = 0;
 
+                    // If nearby linked trap exists, respawn it
+                    if (GameObject* linkedTrap = GetLinkedTrap())
+                        linkedTrap->SetLootState(GO_READY);
+
                     switch (GetGoType())
                     {
                         case GAMEOBJECT_TYPE_FISHINGNODE:   //  can't fish now
@@ -504,11 +527,9 @@ void GameObject::Update(uint32 diff)
                     if (Unit* owner = GetOwner())
                     {
                         // Hunter trap: Search units which are unfriendly to the trap's owner
-                        Trinity::AnyUnfriendlyNoTotemUnitInObjectRangeCheck checker(this, owner, radius);
-                        Trinity::UnitSearcher<Trinity::AnyUnfriendlyNoTotemUnitInObjectRangeCheck> searcher(this, target, checker);
-                        VisitNearbyGridObject(radius, searcher);
-                        if (!target)
-                            VisitNearbyWorldObject(radius, searcher);
+                        Trinity::NearestAttackableNoTotemUnitInObjectRangeCheck checker(this, owner, radius);
+                        Trinity::UnitLastSearcher<Trinity::NearestAttackableNoTotemUnitInObjectRangeCheck> searcher(this, target, checker);
+                        VisitNearbyObject(radius, searcher);
                     }
                     else
                     {
@@ -606,6 +627,10 @@ void GameObject::Update(uint32 diff)
         }
         case GO_JUST_DEACTIVATED:
         {
+            // If nearby linked trap exists, despawn it
+            if (GameObject* linkedTrap = GetLinkedTrap())
+                linkedTrap->SetLootState(GO_JUST_DEACTIVATED);
+
             //if Gameobject should cast spell, then this, but some GOs (type = 10) should be destroyed
             if (GetGoType() == GAMEOBJECT_TYPE_GOOBER)
             {
@@ -625,8 +650,9 @@ void GameObject::Update(uint32 diff)
                 SetGoState(GO_STATE_READY);
 
                 //any return here in case battleground traps
-                if (GetGOInfo()->flags & GO_FLAG_NODESPAWN)
-                    return;
+                if (GameObjectTemplateAddon const* addon = GetTemplateAddon())
+                    if (addon->flags & GO_FLAG_NODESPAWN)
+                        return;
             }
 
             loot.clear();
@@ -647,7 +673,8 @@ void GameObject::Update(uint32 diff)
             {
                 SendObjectDeSpawnAnim(GetGUID());
                 //reset flags
-                SetUInt32Value(GAMEOBJECT_FLAGS, GetGOInfo()->flags);
+                if (GameObjectTemplateAddon const* addon = GetTemplateAddon())
+                    SetUInt32Value(GAMEOBJECT_FLAGS, addon->flags);
             }
 
             if (!m_respawnDelayTime)
@@ -698,7 +725,9 @@ void GameObject::Delete()
     SendObjectDeSpawnAnim(GetGUID());
 
     SetGoState(GO_STATE_READY);
-    SetUInt32Value(GAMEOBJECT_FLAGS, GetGOInfo()->flags);
+
+    if (GameObjectTemplateAddon const* addon = GetTemplateAddon())
+        SetUInt32Value(GAMEOBJECT_FLAGS, addon->flags);
 
     uint32 poolid = GetSpawnId() ? sPoolMgr->IsPartOfAPool<GameObject>(GetSpawnId()) : 0;
     if (poolid)
@@ -1081,25 +1110,8 @@ void GameObject::TriggeringLinkedGameObject(uint32 trapEntry, Unit* target)
     if (!trapSpell)                                          // checked at load already
         return;
 
-    float range = float(target->GetSpellMaxRangeForTarget(GetOwner(), trapSpell));
-
-    // search nearest linked GO
-    GameObject* trapGO = nullptr;
-    {
-        // using original GO distance
-        CellCoord p(Trinity::ComputeCellCoord(GetPositionX(), GetPositionY()));
-        Cell cell(p);
-
-        Trinity::NearestGameObjectEntryInObjectRangeCheck go_check(*target, trapEntry, range);
-        Trinity::GameObjectLastSearcher<Trinity::NearestGameObjectEntryInObjectRangeCheck> checker(this, trapGO, go_check);
-
-        TypeContainerVisitor<Trinity::GameObjectLastSearcher<Trinity::NearestGameObjectEntryInObjectRangeCheck>, GridTypeMapContainer > object_checker(checker);
-        cell.Visit(p, object_checker, *GetMap(), *target, range);
-    }
-
-    // found correct GO
-    if (trapGO)
-        trapGO->CastSpell(target, trapInfo->trap.spellId);
+    if (GameObject* trapGO = GetLinkedTrap())
+        trapGO->CastSpell(target, trapSpell->Id);
 }
 
 GameObject* GameObject::LookupFishingHoleAround(float range)
@@ -1122,7 +1134,9 @@ void GameObject::ResetDoorOrButton()
     if (m_lootState == GO_READY || m_lootState == GO_JUST_DEACTIVATED)
         return;
 
-    SwitchDoorOrButton(false);
+    RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_IN_USE);
+    SetGoState(m_prevGoState);
+
     SetLootState(GO_JUST_DEACTIVATED);
     m_cooldownTime = 0;
 }
@@ -1446,8 +1460,12 @@ void GameObject::Use(Unit* user)
 
                     player->UpdateFishingSkill();
 
-                    // but you will likely cause junk in areas that require a high fishing skill
-                    if (chance >= roll)
+                    /// @todo find reasonable value for fishing hole search
+                    GameObject* fishingPool = LookupFishingHoleAround(20.0f + CONTACT_DISTANCE);
+
+                    // If fishing skill is high enough, or if fishing on a pool, send correct loot.
+                    // Fishing pools have no skill requirement as of patch 3.3.0 (undocumented change).
+                    if (chance >= roll || fishingPool)
                     {
                         /// @todo I do not understand this hack. Need some explanation.
                         // prevent removing GO at spell cancel
@@ -1455,17 +1473,15 @@ void GameObject::Use(Unit* user)
                         SetOwnerGUID(player->GetGUID());
                         SetSpellId(0); // prevent removing unintended auras at Unit::RemoveGameObject
 
-                        /// @todo find reasonable value for fishing hole search
-                        GameObject* ok = LookupFishingHoleAround(20.0f + CONTACT_DISTANCE);
-                        if (ok)
+                        if (fishingPool)
                         {
-                            ok->Use(player);
+                            fishingPool->Use(player);
                             SetLootState(GO_JUST_DEACTIVATED);
                         }
                         else
                             player->SendLoot(GetGUID(), LOOT_FISHING);
                     }
-                    else // else: junk
+                    else // If fishing skill is too low, send junk loot.
                         player->SendLoot(GetGUID(), LOOT_FISHING_JUNK);
                     break;
                 }
@@ -1780,7 +1796,12 @@ void GameObject::Use(Unit* user)
         CastSpell(user, spellId);
 }
 
-void GameObject::CastSpell(Unit* target, uint32 spellId, bool triggered /*= true*/)
+void GameObject::CastSpell(Unit* target, uint32 spellId, bool triggered /* = true*/)
+{
+    CastSpell(target, spellId, triggered ? TRIGGERED_FULL_MASK : TRIGGERED_NONE);
+}
+
+void GameObject::CastSpell(Unit* target, uint32 spellId, TriggerCastFlags triggered)
 {
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
@@ -1808,18 +1829,23 @@ void GameObject::CastSpell(Unit* target, uint32 spellId, bool triggered /*= true
     if (!trigger)
         return;
 
+    // remove immunity flags, to allow spell to target anything
+    trigger->RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_NPC | UNIT_FLAG_IMMUNE_TO_PC);
+
     if (Unit* owner = GetOwner())
     {
         trigger->setFaction(owner->getFaction());
         if (owner->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP_ATTACKABLE))
             trigger->SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP_ATTACKABLE);
+        // copy pvp state flags from owner
+        trigger->SetByteValue(UNIT_FIELD_BYTES_2, 1, owner->GetByteValue(UNIT_FIELD_BYTES_2, 1));
         // needed for GO casts for proper target validation checks
         trigger->SetOwnerGUID(owner->GetGUID());
         trigger->CastSpell(target ? target : trigger, spellInfo, triggered, nullptr, nullptr, owner->GetGUID());
     }
     else
     {
-        trigger->setFaction(14);
+        trigger->setFaction(spellInfo->IsPositive() ? 35 : 14);
         // Set owner guid for target if no owner available - needed by trigger auras
         // - trigger gets despawned and there's no caster avalible (see AuraEffect::TriggerSpell())
         trigger->CastSpell(target ? target : trigger, spellInfo, triggered, nullptr, nullptr, target ? target->GetGUID() : ObjectGuid::Empty);
@@ -2167,7 +2193,7 @@ Group* GameObject::GetLootRecipientGroup() const
     return sGroupMgr->GetGroupByGUID(m_lootRecipientGroup);
 }
 
-void GameObject::SetLootRecipient(Unit* unit)
+void GameObject::SetLootRecipient(Unit* unit, Group* group)
 {
     // set the player whose group should receive the right
     // to loot the creature after it dies
@@ -2176,7 +2202,7 @@ void GameObject::SetLootRecipient(Unit* unit)
     if (!unit)
     {
         m_lootRecipient.Clear();
-        m_lootRecipientGroup = 0;
+        m_lootRecipientGroup = group ? group->GetLowGUID() : 0;
         return;
     }
 
@@ -2188,8 +2214,12 @@ void GameObject::SetLootRecipient(Unit* unit)
         return;
 
     m_lootRecipient = player->GetGUID();
-    if (Group* group = player->GetGroup())
+
+    // either get the group from the passed parameter or from unit's one
+    if (group)
         m_lootRecipientGroup = group->GetLowGUID();
+    else if (Group* unitGroup = player->GetGroup())
+        m_lootRecipientGroup = unitGroup->GetLowGUID();
 }
 
 bool GameObject::IsLootAllowedFor(Player const* player) const
@@ -2205,6 +2235,11 @@ bool GameObject::IsLootAllowedFor(Player const* player) const
         return false;                                           // if go doesnt have group bound it means it was solo killed by someone else
 
     return true;
+}
+
+GameObject* GameObject::GetLinkedTrap()
+{
+    return ObjectAccessor::GetGameObject(*this, m_linkedTrap);
 }
 
 void GameObject::BuildValuesUpdate(uint8 updateType, ByteBuffer* data, Player* target) const
