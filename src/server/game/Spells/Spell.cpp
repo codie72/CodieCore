@@ -7578,28 +7578,4 @@ bool WorldObjectSpellConeTargetCheck::operator()(WorldObject* target)
         if (!_caster->isInBack(target, _coneAngle))
             return false;
     }
-    else if (_spellInfo->HasAttribute(SPELL_ATTR0_CU_CONE_LINE))
-    {
-        if (!_caster->HasInLine(target, _caster->GetObjectSize() + target->GetObjectSize()))
-            return false;
-    }
-    else
-    {
-        if (!_caster->isInFront(target, _coneAngle))
-            return false;
-    }
-    return WorldObjectSpellAreaTargetCheck::operator ()(target);
-}
-
-WorldObjectSpellTrajTargetCheck::WorldObjectSpellTrajTargetCheck(float range, Position const* position, Unit* caster, SpellInfo const* spellInfo)
-    : WorldObjectSpellAreaTargetCheck(range, position, caster, caster, spellInfo, TARGET_CHECK_DEFAULT, NULL) { }
-
-bool WorldObjectSpellTrajTargetCheck::operator()(WorldObject* target)
-{
-    // return all targets on missile trajectory (0 - size of a missile)
-    if (!_caster->HasInLine(target, target->GetObjectSize()))
-        return false;
-    return WorldObjectSpellAreaTargetCheck::operator ()(target);
-}
-
-} //namespace Trinity
+    else if (_spellInfo->HasAttribute(SPELL_ATTR0_CU_CONE_LINE))CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD
